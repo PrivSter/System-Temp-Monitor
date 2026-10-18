@@ -1,7 +1,47 @@
 #!/bin/bash
+# Temprogram - record the system temperature with a timestamp.
+#
+# Each run appends one line to a CSV log, e.g.
+#   2026-10-18 09:40:00,48.3
+# Designed to be run by cron every 10 minutes; see README.md.
+#
+# Set TEMP_LOG to change where readings are written
+# (default: ~/temp-readings.csv).
 
-sudo vcgencmd measure_temp >> ~/Desktop/readings.txt
+LOG_FILE="${TEMP_LOG:-$HOME/temp-readings.csv}"
 
+read_temp() {
+    # Raspberry Pi firmware tool; prints e.g. temp=48.3'C. No sudo needed
+    # for users in the "video" group, which includes the default user.
+    if command -v vcgencmd >/dev/null 2>&1; then
+        local out
+        if out=$(vcgencmd measure_temp 2>/dev/null) && [[ $out == temp=* ]]; then
+            out=${out#temp=}
+            echo "${out%\'C}"
+            return 0
+        fi
+    fi
+    # Any other Linux machine: the kernel reports millidegrees Celsius.
+    local zone
+    for zone in /sys/class/thermal/thermal_zone*/temp; do
+        if [ -r "$zone" ]; then
+            awk '{ printf "%.1f\n", $1 / 1000 }' "$zone"
+            return 0
+        fi
+    done
+    return 1
+}
 
+if ! temp=$(read_temp); then
+    echo "Temprogram: no temperature sensor found" >&2
+    exit 1
+fi
 
+mkdir -p "$(dirname "$LOG_FILE")"
+[ -s "$LOG_FILE" ] || echo "timestamp,temp_c" > "$LOG_FILE"
+echo "$(date '+%Y-%m-%d %H:%M:%S'),$temp" >> "$LOG_FILE"
 
+# Show the reading when run by hand rather than by cron.
+if [ -t 1 ]; then
+    echo "${temp}°C  (logged to $LOG_FILE)"
+fi
